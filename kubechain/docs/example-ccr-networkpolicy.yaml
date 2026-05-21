@@ -1,0 +1,124 @@
+# docs/example-ccr-networkpolicy.yaml
+#
+# Exemplo real de uso do KubeChain:
+# Um engenheiro quer adicionar uma NetworkPolicy que permite
+# tráfego do namespace "payments" para o "database".
+#
+# SEM KubeChain: kubectl apply vai direto no cluster.
+# COM KubeChain: precisa passar por validação IA + consenso Fabric.
+#
+# Fluxo após aplicar este CCR:
+#   1. Reconciler detecta o novo CCR
+#   2. AI Validator analisa o diff (estado atual vs proposto)
+#   3. Se AI score < 0.85 → submete ao Fabric para endorse/commit
+#   4. SmartBFT orderers confirmam o bloco
+#   5. ProofToken é gravado no .status
+#   6. Reconciler aplica o manifest com a annotation kubechain.io/proof-token
+#   7. ValidatingWebhook verifica o token no Fabric → permite
+
+apiVersion: kubechain.io/v1
+kind: ConfigChangeRequest
+metadata:
+  name: allow-payments-to-database-netpol
+  namespace: kubechain-system
+  labels:
+    kubechain.io/team: infra
+    kubechain.io/env: production
+spec:
+  resourceKind: NetworkPolicy
+  resourceName: allow-payments-to-database
+  namespace: database
+
+  changelogDescription: >
+    Permitir tráfego TCP 5432 (PostgreSQL) do namespace 'payments' para o
+    namespace 'database'. Necessário para o novo serviço payments-service-v2
+    que foi migrado para o namespace dedicado. PR #1847 no repositório
+    k8s-infra. Aprovado pelo tech lead de infra em 2026-05-20.
+
+  prReference: "https://github.com/qintess/k8s-infra/pull/1847"
+  requestedBy: "joao.silva@qintess.com"
+  urgency: medium
+
+  rawManifest:
+    apiVersion: networking.k8s.io/v1
+    kind: NetworkPolicy
+    metadata:
+      name: allow-payments-to-database
+      namespace: database
+      labels:
+        app.kubernetes.io/managed-by: kubechain
+    spec:
+      podSelector:
+        matchLabels:
+          app: postgres
+      policyTypes:
+        - Ingress
+      ingress:
+        - from:
+            - namespaceSelector:
+                matchLabels:
+                  kubernetes.io/metadata.name: payments
+            - podSelector:
+                matchLabels:
+                  app: payments-service
+          ports:
+            - protocol: TCP
+              port: 5432
+
+---
+# Após aprovação, o status do CCR ficará assim:
+#
+# status:
+#   phase: Applied
+#   aiScore: 0.12
+#   aiReasoning: "Mudança consistente com changelog. Abre apenas porta 5432
+#     para namespace e pod específicos. Sem wildcard, sem escalada de
+#     privilégios. Risco baixo."
+#   fabricTxId: "a3f8b2c1d4e5..."
+#   proofToken: "kt_7f3a9b2c1d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0"
+#   blockNumber: 42
+#   endorsers:
+#     - "peer0-infra.org-infra"
+#     - "peer0-sec.org-sec"
+#     - "peer0-sre.org-sre"
+#   appliedAt: "2026-05-21T14:32:00Z"
+#   conditions:
+#     - type: FabricConsensusReached
+#       status: "True"
+#       reason: BlockCommitted
+#       message: "bloco 42, tx a3f8b2c1d4e5..."
+#     - type: Applied
+#       status: "True"
+#       reason: ManifestApplied
+#       message: "aplicado ao cluster em 2026-05-21T14:32:00Z"
+
+---
+# O NetworkPolicy no cluster terá essas annotations:
+#
+# apiVersion: networking.k8s.io/v1
+# kind: NetworkPolicy
+# metadata:
+#   name: allow-payments-to-database
+#   namespace: database
+#   annotations:
+#     kubechain.io/proof-token: "kt_7f3a9b2c1..."
+#     kubechain.io/fabric-txid: "a3f8b2c1d4e5..."
+#     kubechain.io/ccr-name: "allow-payments-to-database-netpol"
+#     kubechain.io/ccr-namespace: "kubechain-system"
+
+---
+# EXEMPLO DE REJEIÇÃO - mudança inconsistente com changelog
+#
+# Se o changelog diz "ajuste de labels" mas o manifest
+# adiciona um ClusterRoleBinding com verbs wildcard:
+#
+# status:
+#   phase: Rejected
+#   aiScore: 0.94
+#   aiReasoning: "CRÍTICO: O changelog descreve 'ajuste de labels' mas o
+#     manifest propõe criação de ClusterRoleBinding com verbs: ['*'].
+#     Essa é uma escalada de privilégios severa completamente inconsistente
+#     com a descrição fornecida. Possível attempt de privilege escalation
+#     usando descrição enganosa."
+#   rejectionReason: "AI risk score 0.94 excede threshold 0.85: CRÍTICO:
+#     O changelog descreve 'ajuste de labels' mas o manifest..."

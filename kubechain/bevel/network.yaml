@@ -1,0 +1,212 @@
+# bevel/network.yaml
+# Configuração do Hyperledger Bevel para deploy da rede KubeGov no Kubernetes.
+# Use: ansible-playbook run.yaml -e "@bevel/network.yaml"
+# Referência: https://hyperledger-bevel.readthedocs.io/
+
+network:
+  type: fabric
+  version: 3.1.4          # Fabric 3.x com SmartBFT (BFT consensus)
+
+  env:
+    type: "operator"       # usa bevel-operator-fabric (CRDs nativos K8s)
+    proxy: istio
+    retry_count: 30
+    external_dns: enabled
+
+  docker:
+    url: "docker.io"
+    # Credenciais via Vault/Secret — não commitar aqui
+
+  # Canal KubeGov: onde o chaincode de governança roda
+  channels:
+    - channel:
+        name: kubegov
+        consortium: KubeGovConsortium
+        orderer:
+          name: kubegov-orderer
+        participants:
+          - organization: org-infra
+          - organization: org-sec
+          - organization: org-sre
+          - organization: org-compliance
+
+  # Chaincode KubeGov instalado em todos os peers
+  chaincodes:
+    - chaincode:
+        name: kubegov
+        version: "1.0"
+        lang: golang
+        channel: kubegov
+        path: ./chaincode/
+        # Endorse policy: Infra + Sec + pelo menos 1 adicional
+        # Sintaxe: OutOf(2, "org-infra.member", "org-sec.member") AND OutOf(1, "org-sre.member", "org-compliance.member")
+        policy: "AND('org-infra.member', 'org-sec.member', OR('org-sre.member', 'org-compliance.member'))"
+
+  # Organizações do consórcio KubeChain
+  # Cada org = um squad/time com responsabilidade diferente no cluster
+  organizations:
+
+    - organization:
+        name: org-infra
+        country: BR
+        state: SP
+        location: "Sao Paulo"
+        subject: "O=OrgInfra,OU=Infrastructure,L=SaoPaulo,ST=SP,C=BR"
+        external_url_suffix: "infra.kubechain.internal"
+        type: peer          # org com peers + participa do channel
+        cloud_provider: aws
+
+        k8s:
+          context: "k8s-production-cluster"
+          config_file: "/path/to/kubeconfig"
+          namespace: "kubechain-fabric-infra"
+
+        vault:
+          url: "https://vault.internal:8200"
+          secret_path: "secret/kubechain/org-infra"
+
+        # Vault gerencia todas as chaves criptográficas dos peers
+        gitops:
+          git_protocol: ssh
+          git_url: "git@github.com:qintess/kubechain-config.git"
+          git_repo: "kubechain-config"
+          chart_source: "bevel-charts"
+          git_push_interval: 30
+          username: "kubechain-gitops-bot"
+          password: "{{ vault_path }}/gitops-token"
+          email: "kubechain@qintess.com"
+          private_key: "{{ vault_path }}/gitops-ssh-key"
+
+        peers:
+          - peer:
+              name: "peer0-infra"
+              gossip:
+                bootstrap: "peer0-infra:7051"
+                use_leader_election: true
+              grpc:
+                port: 7051
+              events:
+                port: 7053
+              couchdb:
+                port: 5984
+              # StateDB CouchDB para rich queries no histórico de mudanças
+              configtx:
+                anchorpeer:
+                  name: "peer0-infra"
+                  port: 7051
+
+          - peer:
+              name: "peer1-infra"   # HA: segundo peer para tolerância a falhas
+              gossip:
+                bootstrap: "peer0-infra:7051"
+              grpc:
+                port: 7051
+              couchdb:
+                port: 5984
+
+    - organization:
+        name: org-sec
+        country: BR
+        state: SP
+        location: "Sao Paulo"
+        subject: "O=OrgSec,OU=Security,L=SaoPaulo,ST=SP,C=BR"
+        external_url_suffix: "sec.kubechain.internal"
+        type: peer
+        cloud_provider: aws
+
+        k8s:
+          context: "k8s-production-cluster"
+          config_file: "/path/to/kubeconfig"
+          namespace: "kubechain-fabric-sec"
+
+        vault:
+          url: "https://vault.internal:8200"
+          secret_path: "secret/kubechain/org-sec"
+
+        gitops:
+          git_protocol: ssh
+          git_url: "git@github.com:qintess/kubechain-config.git"
+          git_repo: "kubechain-config"
+          chart_source: "bevel-charts"
+
+        peers:
+          - peer:
+              name: "peer0-sec"
+              gossip:
+                bootstrap: "peer0-sec:7051"
+                use_leader_election: true
+              grpc:
+                port: 7051
+              couchdb:
+                port: 5984
+              configtx:
+                anchorpeer:
+                  name: "peer0-sec"
+                  port: 7051
+
+    - organization:
+        name: org-sre
+        type: peer
+        subject: "O=OrgSRE,OU=SRE,L=SaoPaulo,ST=SP,C=BR"
+        external_url_suffix: "sre.kubechain.internal"
+        k8s:
+          context: "k8s-production-cluster"
+          namespace: "kubechain-fabric-sre"
+        peers:
+          - peer:
+              name: "peer0-sre"
+              grpc:
+                port: 7051
+
+    - organization:
+        name: org-compliance
+        type: peer
+        subject: "O=OrgCompliance,OU=Compliance,L=SaoPaulo,ST=SP,C=BR"
+        external_url_suffix: "compliance.kubechain.internal"
+        k8s:
+          context: "k8s-production-cluster"
+          namespace: "kubechain-fabric-compliance"
+        peers:
+          - peer:
+              name: "peer0-compliance"
+              grpc:
+                port: 7051
+
+    # Orderers com SmartBFT — tolerância Bizantina (até f = floor((n-1)/3) falhas maliciosas)
+    # Com 4 orderers: tolera até 1 orderer comprometido
+    # Com 7 orderers: tolera até 2 orderers comprometidos (recomendado para prod)
+    - organization:
+        name: kubegov-orderer
+        subject: "O=KubeGovOrderer,OU=Orderer,L=SaoPaulo,ST=SP,C=BR"
+        type: orderer
+        external_url_suffix: "orderer.kubechain.internal"
+
+        k8s:
+          context: "k8s-production-cluster"
+          namespace: "kubechain-fabric-orderer"
+
+        vault:
+          url: "https://vault.internal:8200"
+          secret_path: "secret/kubechain/orderer"
+
+        orderers:
+          - orderer:
+              name: orderer1
+              type: SmartBFT
+              grpc:
+                port: 7050
+          - orderer:
+              name: orderer2
+              type: SmartBFT
+              grpc:
+                port: 7050
+          - orderer:
+              name: orderer3
+              type: SmartBFT
+              grpc:
+                port: 7050
+          - orderer:
+              name: orderer4
+              type: SmartBFT
+              grpc:
+                port: 7050
