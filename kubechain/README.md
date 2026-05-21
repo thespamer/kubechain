@@ -1,47 +1,47 @@
 # KubeChain
 
-**Consenso criptográfico para mudanças de configuração no Kubernetes.**  
-Hyperledger Fabric · SmartBFT · Kubebuilder · Validação por IA
+**Cryptographic consensus for Kubernetes configuration changes.**  
+Hyperledger Fabric · SmartBFT · Kubebuilder · AI validation
 
 ---
 
-## O problema que isso resolve
+## The problem this solves
 
-Em clusters Kubernetes de produção, qualquer engenheiro com acesso ao `kubectl` pode aplicar uma mudança de `NetworkPolicy`, `ClusterRole` ou `Deployment` sem que ninguém — nem uma ferramenta, nem um processo — tenha concordado formalmente com aquilo. O GitOps ajuda (mudanças rastreadas em git), mas o modelo ainda é baseado em **confiança**: você confia que o processo foi seguido, que o PR foi revisado, que ninguém vai fazer um `kubectl apply` direto.
+In production Kubernetes clusters, any engineer with access to `kubectl` can apply a `NetworkPolicy`, `ClusterRole`, or `Deployment` change without anyone, whether a tool or a process, formally agreeing to it. GitOps helps because changes are tracked in git, but the model is still based on **trust**: you trust that the process was followed, that the PR was reviewed, and that nobody will run a direct `kubectl apply`.
 
-KubeChain elimina a confiança como requisito. Substitui por **prova**.
+KubeChain removes trust as a requirement. It replaces trust with **proof**.
 
-Toda mudança de configuração precisa:
+Every configuration change must:
 
-1. Ser analisada por um **AI Validator** (consistência semântica entre o manifest e o changelog)
-2. Ser **endossada por múltiplas organizações** em uma rede Hyperledger Fabric
-3. Ter o consenso confirmado pelo **algoritmo SmartBFT** nos orderers
-4. Gerar um **ProofToken** — hash criptográfico do bloco no ledger
-5. Apresentar esse token ao **ValidatingAdmissionWebhook** no momento da aplicação
+1. Be analyzed by an **AI Validator** for semantic consistency between the manifest and the changelog
+2. Be **endorsed by multiple organizations** in a Hyperledger Fabric network
+3. Have consensus confirmed by the **SmartBFT algorithm** on the orderers
+4. Generate a **ProofToken**, a cryptographic hash of the block in the ledger
+5. Present that token to the **ValidatingAdmissionWebhook** at apply time
 
-Sem o token. Sem o bloco no ledger. Sem a aplicação. Não existe bypass.
+No token. No ledger block. No apply. There is no bypass.
 
 ---
 
-## Inspiração arquitetural: Chainlink "Proof over Trust"
+## Architectural inspiration: Chainlink "Proof over Trust"
 
-O Chainlink construiu uma infraestrutura onde dados externos são verificados criptograficamente antes de chegarem a smart contracts — sem depender de confiar em quem forneceu os dados. A verdade é provada, não prometida.
+Chainlink built infrastructure where external data is cryptographically verified before reaching smart contracts, without relying on trust in whoever supplied the data. Truth is proven, not promised.
 
-KubeChain traduz esse princípio para o plano de controle do Kubernetes:
+KubeChain translates that principle to the Kubernetes control plane:
 
 | Chainlink | KubeChain |
 |-----------|-----------|
-| Proof of Reserve | Proof of Config — estado do cluster registrado no ledger |
-| Decentralized Oracle Network | Peers multi-org (Infra, Sec, SRE, Compliance) |
-| Smart contract onchain | KubeGov Chaincode — valida, registra, emite provas |
+| Proof of Reserve | Proof of Config — cluster state recorded in the ledger |
+| Decentralized Oracle Network | Multi-org peers (Infra, Sec, SRE, Compliance) |
+| Smart contract onchain | KubeGov Chaincode — validates, records, and emits proofs |
 | Cryptographic truth | ProofToken — SHA-256(proposalID + txID + manifestHash) |
-| Cannot trust, must verify | Webhook bloqueia sem prova — fail-closed por padrão |
+| Cannot trust, must verify | Webhook blocks without proof — fail-closed by default |
 
 ---
 
-## Como funciona
+## How it works
 
-### Visão geral do fluxo
+### Flow overview
 
 ```
 Engineer                 KubeChain Operator        Hyperledger Fabric
@@ -50,7 +50,7 @@ Engineer                 KubeChain Operator        Hyperledger Fabric
    │   (ConfigChangeRequest)   │                          │
    │                           │─── AI Validate diff ─── │
    │                           │    (LLM: changelog vs    │
-   │                           │     manifest semântica)  │
+   │                           │     manifest semantics)  │
    │                           │                          │
    │                           │─── SubmitProposal ─────> │
    │                           │                          │── ProposeChange()
@@ -73,18 +73,18 @@ Engineer                 KubeChain Operator        Hyperledger Fabric
    │ <── CCR status: Applied ──│                          │
 
 
-Se alguém tentar kubectl apply direto (sem CCR):
+If someone tries a direct kubectl apply without a CCR:
    │── kubectl apply ─────────> ValidatingWebhook
-   │                            │── sem proof-token
+   │                            │── no proof-token
    │                            │── 403 Forbidden
-   │ <── "Crie um CCR" ────────│
+   │ <── "Create a CCR" ───────│
 ```
 
-### Os quatro componentes principais
+### The four main components
 
 #### 1. ConfigChangeRequest (CRD)
 
-O objeto Kubernetes que representa uma proposta de mudança. É o ponto de entrada de todo o sistema.
+The Kubernetes object that represents a change proposal. It is the entry point for the whole system.
 
 ```yaml
 apiVersion: kubechain.io/v1
@@ -97,18 +97,18 @@ spec:
   resourceName: allow-payments-to-database
   namespace: database
   changelogDescription: >
-    Permite TCP 5432 do namespace payments para database.
-    Necessário para payments-service-v2 migrado em PR #1847.
+    Allows TCP 5432 from the payments namespace to database.
+    Required for payments-service-v2 migrated in PR #1847.
   prReference: "https://github.com/org/repo/pull/1847"
   requestedBy: "joao.silva@empresa.com"
   urgency: medium
   rawManifest:
     apiVersion: networking.k8s.io/v1
     kind: NetworkPolicy
-    # ... manifest completo
+    # ... full manifest
 ```
 
-O CCR passa pelos seguintes estados:
+The CCR moves through these states:
 
 ```
 Pending → AIValidating → FabricPending → Endorsed → Approved → Applied
@@ -118,118 +118,118 @@ Pending → AIValidating → FabricPending → Endorsed → Approved → Applied
 
 #### 2. Reconciler (Kubernetes Operator)
 
-O controller em Go (Kubebuilder) que orquestra o pipeline. A cada transição de estado ele:
+The Go controller built with Kubebuilder that orchestrates the pipeline. At each state transition it:
 
-- **Pending → AIValidating**: busca o estado atual do resource no cluster, monta o diff e envia para o AI Validator
-- **AIValidating → FabricPending**: se o score de risco for aceitável (< 0.85), submete a proposta ao Fabric
-- **FabricPending → Approved**: aguarda o ProofToken do ledger e grava no `.status` do CCR
-- **Approved → Applied**: injeta o ProofToken como annotation e aplica o manifest via Server-Side Apply
+- **Pending → AIValidating**: fetches the current resource state from the cluster, builds the diff, and sends it to the AI Validator
+- **AIValidating → FabricPending**: if the risk score is acceptable (< 0.85), submits the proposal to Fabric
+- **FabricPending → Approved**: waits for the ProofToken from the ledger and writes it to the CCR `.status`
+- **Approved → Applied**: injects the ProofToken as an annotation and applies the manifest via Server-Side Apply
 
-Toda transição é gravada no `.status` antes de avançar — se o pod restartar no meio do processo, o reconciler retoma exatamente de onde parou.
+Every transition is written to `.status` before advancing. If the pod restarts mid-process, the reconciler resumes exactly where it stopped.
 
 #### 3. KubeGov Chaincode (Hyperledger Fabric)
 
-O smart contract escrito em Go que roda nos peers de cada organização. Ele é o único lugar onde a "prova" é criada.
+The smart contract written in Go that runs on each organization's peers. It is the only place where the "proof" is created.
 
-Funções principais:
+Main functions:
 
-- **`ProposeChange()`** — registra a proposta no ledger com hash do manifest, AI score, changelog, e referência ao PR
-- **`ApproveChange()`** — após o consenso SmartBFT, gera o ProofToken: `SHA-256(proposalID + txID + manifestHash)`. Este token é matematicamente vinculado ao bloco específico no ledger.
-- **`VerifyProofToken()`** — chamado pelo webhook a cada admission. Verifica: (a) o token existe no ledger, (b) o token não foi invalidado, (c) o hash do manifest enviado bate com o hash aprovado — detectando qualquer adulteração pós-aprovação.
-- **`MarkApplied()`** — registra que a mudança foi efetivamente aplicada ao cluster
-- **`GetProposalHistory()`** — histórico completo de todas as mudanças em um resource
+- **`ProposeChange()`** — records the proposal in the ledger with the manifest hash, AI score, changelog, and PR reference
+- **`ApproveChange()`** — after SmartBFT consensus, generates the ProofToken: `SHA-256(proposalID + txID + manifestHash)`. This token is mathematically bound to the specific block in the ledger.
+- **`VerifyProofToken()`** — called by the webhook on every admission. It verifies: (a) the token exists in the ledger, (b) the token was not invalidated, and (c) the submitted manifest hash matches the approved hash, detecting any post-approval tampering.
+- **`MarkApplied()`** — records that the change was actually applied to the cluster
+- **`GetProposalHistory()`** — returns the full history of all changes to a resource
 
-A **endorse policy** do channel garante que nenhuma proposta é aprovada sem:
+The channel **endorse policy** ensures that no proposal is approved without:
 
 ```
 AND('org-infra', 'org-sec', OR('org-sre', 'org-compliance'))
 ```
 
-Infra + Segurança obrigatórios, mais pelo menos um terceiro.
+Infra and Security are mandatory, plus at least one third organization.
 
 #### 4. ValidatingAdmissionWebhook
 
-Intercepta toda operação de criação ou update nos resource types monitorados, direto no kube-apiserver, antes de qualquer dado chegar ao etcd.
+Intercepts every create or update operation on monitored resource types, directly in the kube-apiserver, before any data reaches etcd.
 
-A lógica de validação tem três verificações em sequência:
+The validation logic has three sequential checks:
 
-1. **Annotation presente?** — `kubechain.io/proof-token` existe no resource?
-2. **Token válido no Fabric?** — o token existe no ledger e não foi invalidado?
-3. **Hash confere?** — o SHA-256 do manifest atual bate com o hash gravado na aprovação?
+1. **Annotation present?** — does `kubechain.io/proof-token` exist on the resource?
+2. **Valid token in Fabric?** — does the token exist in the ledger and has it not been invalidated?
+3. **Hash matches?** — does the SHA-256 hash of the current manifest match the hash recorded at approval time?
 
-Se qualquer verificação falhar → `403 Forbidden`. Sem exceção, sem override manual.
+If any check fails → `403 Forbidden`. No exception, no manual override.
 
-**Comportamento fail-closed**: se o Fabric estiver temporariamente indisponível quando o webhook tenta verificar o token, a admission é negada. Segurança tem prioridade sobre disponibilidade.
+**Fail-closed behavior**: if Fabric is temporarily unavailable when the webhook tries to verify the token, admission is denied. Security takes priority over availability.
 
-**Única exceção**: o próprio `kubechain-operator` ServiceAccount é allowlisted — ele é quem injeta o token e aplica o manifest após aprovação.
+**Only exception**: the `kubechain-operator` ServiceAccount itself is allowlisted because it injects the token and applies the manifest after approval.
 
 ---
 
-## Recursos Kubernetes monitorados
+## Monitored Kubernetes resources
 
-Por padrão, o webhook intercepta mudanças nos seguintes tipos:
+By default, the webhook intercepts changes to these types:
 
-| Categoria | Resource types |
+| Category | Resource types |
 |-----------|---------------|
-| Rede | `NetworkPolicy` |
+| Network | `NetworkPolicy` |
 | RBAC | `ClusterRole`, `ClusterRoleBinding`, `Role`, `RoleBinding` |
 | Workloads | `Deployment`, `StatefulSet`, `DaemonSet` |
-| Configuração | `ConfigMap` (com label `kubechain.io/sensitive=true`), `Secret` |
-| Exposição | `Ingress` |
+| Configuration | `ConfigMap` (with label `kubechain.io/sensitive=true`), `Secret` |
+| Exposure | `Ingress` |
 | Admission | `MutatingWebhookConfiguration`, `ValidatingWebhookConfiguration` |
-| Infraestrutura | `Namespace` |
+| Infrastructure | `Namespace` |
 
-Outros resource types passam livremente pelo kube-apiserver sem intervenção do KubeChain.
+Other resource types pass through the kube-apiserver freely without KubeChain intervention.
 
 ---
 
-## Validação por IA
+## AI validation
 
-O AI Validator é um sidecar no pod do operator que recebe o diff e o changelog e faz uma análise semântica usando um LLM.
+The AI Validator is a sidecar in the operator pod. It receives the diff and changelog, then performs semantic analysis using an LLM.
 
-O prompt é estruturado para detectar:
+The prompt is structured to detect:
 
-- **Inconsistência semântica**: o changelog diz "ajuste de labels" mas o manifest adiciona um `ClusterRoleBinding` com `verbs: ["*"]`
-- **Privilege escalation**: wildcard verbs, capabilities perigosas (`SYS_ADMIN`, `NET_ADMIN`)
-- **Exposição não justificada**: NetworkPolicy que abre tráfego não mencionado no changelog
-- **Secret exposure**: env vars ou volumeMounts expondo secrets de forma insegura
-- **Webhook tampering**: mudanças em `ValidatingWebhookConfiguration` ou `MutatingWebhookConfiguration`
+- **Semantic inconsistency**: the changelog says "label adjustment" but the manifest adds a `ClusterRoleBinding` with `verbs: ["*"]`
+- **Privilege escalation**: wildcard verbs or dangerous capabilities (`SYS_ADMIN`, `NET_ADMIN`)
+- **Unjustified exposure**: NetworkPolicy that opens traffic not mentioned in the changelog
+- **Secret exposure**: env vars or volumeMounts exposing secrets insecurely
+- **Webhook tampering**: changes to `ValidatingWebhookConfiguration` or `MutatingWebhookConfiguration`
 
-O LLM retorna um **risk score** de 0.0 a 1.0 e um resumo em linguagem natural.
+The LLM returns a **risk score** from 0.0 to 1.0 and a natural-language summary.
 
-| Score | Ação |
+| Score | Action |
 |-------|------|
-| 0.0 – 0.30 | Aprovado automaticamente, segue para Fabric |
-| 0.30 – 0.60 | Aprovado com aviso, reasoning gravado no status |
-| 0.60 – 0.85 | Aprovado mas sinalizado — exige changelog detalhado (≥ 50 chars) |
-| 0.85 – 1.0 | **Rejeitado automaticamente** — CCR entra em `Rejected` |
+| 0.0 – 0.30 | Automatically approved, continues to Fabric |
+| 0.30 – 0.60 | Approved with warning, reasoning recorded in status |
+| 0.60 – 0.85 | Approved but flagged — requires detailed changelog (≥ 50 chars) |
+| 0.85 – 1.0 | **Automatically rejected** — CCR enters `Rejected` |
 
-O sidecar é compatível com qualquer API OpenAI-compatible: Ollama local (`qwen2.5-coder`, `llama3`, `mistral`), OpenAI, Azure OpenAI, ou Anthropic Claude.
+The sidecar is compatible with any OpenAI-compatible API: local Ollama (`qwen2.5-coder`, `llama3`, `mistral`), OpenAI, Azure OpenAI, or Anthropic Claude.
 
 ---
 
-## Garantias de segurança
+## Security guarantees
 
-| Garantia | Mecanismo |
+| Guarantee | Mechanism |
 |----------|-----------|
-| Toda mudança tem prova | ProofToken vinculado criptograficamente ao bloco no Fabric |
-| Ninguém aplica sem consenso | Webhook bloqueia admission sem token válido |
-| Adulteração pós-aprovação detectada | Hash do manifest verificado no ledger a cada admission |
-| Replay attack impossível | Token é específico para o resource + manifest + proposta |
-| Orderer comprometido não quebra | SmartBFT tolera até f = ⌊(n-1)/3⌋ orderers maliciosos |
-| Ledger é imutável | Append-only, estrutura de blocos encadeados por hash |
-| Auditoria completa | GetProposalHistory() retorna todo histórico de um resource |
-| Fail-closed | Fabric indisponível → admission negada (não liberada) |
+| Every change has proof | ProofToken cryptographically bound to a Fabric block |
+| Nobody applies without consensus | Webhook blocks admission without a valid token |
+| Post-approval tampering is detected | Manifest hash is verified in the ledger on every admission |
+| Replay attack is impossible | Token is specific to the resource + manifest + proposal |
+| A compromised orderer does not break the system | SmartBFT tolerates up to f = ⌊(n-1)/3⌋ malicious orderers |
+| The ledger is immutable | Append-only structure with hash-linked blocks |
+| Complete audit trail | GetProposalHistory() returns the full history for a resource |
+| Fail-closed | Fabric unavailable → admission denied, not allowed |
 
 ---
 
-## Estrutura do projeto
+## Project structure
 
 ```
 kubechain/
 │
 ├── chaincode/
-│   └── kubegov.go                  # Smart contract Fabric
+│   └── kubegov.go                  # Fabric smart contract
 │                                   # ProposeChange, ApproveChange, VerifyProofToken
 │
 ├── operator/
@@ -237,10 +237,10 @@ kubechain/
 │   │   └── configchangerequest_types.go    # CRD: ConfigChangeRequest + status
 │   │
 │   ├── controllers/
-│   │   └── configchangerequest_controller.go  # Reconciler: pipeline de estados
+│   │   └── configchangerequest_controller.go  # Reconciler: state pipeline
 │   │
 │   ├── webhook/
-│   │   └── validating_webhook.go           # Admission webhook fail-closed
+│   │   └── validating_webhook.go           # Fail-closed admission webhook
 │   │
 │   └── pkg/
 │       ├── fabric/                         # fabric-gateway SDK client
@@ -249,132 +249,132 @@ kubechain/
 │           └── validator.go                # AI Validator client (LLM sidecar)
 │
 ├── bevel/
-│   └── network.yaml                # Deploy automatizado da rede Fabric no K8s
-│                                   # 4 orgs, 4 orderers SmartBFT, CouchDB
+│   └── network.yaml                # Automated Fabric network deployment on K8s
+│                                   # 4 orgs, 4 SmartBFT orderers, CouchDB
 │
 └── docs/
-    └── example-ccr-networkpolicy.yaml  # Exemplo comentado de uso real
+    └── example-ccr-networkpolicy.yaml  # Commented real-world usage example
 ```
 
 ---
 
-## Dependências
+## Dependencies
 
-### Runtime (o que precisa existir no cluster)
+### Runtime (what must exist in the cluster)
 
-| Dependência | Versão mínima | Finalidade |
+| Dependency | Minimum version | Purpose |
 |-------------|---------------|------------|
-| Kubernetes | 1.28+ | Plataforma base; suporte a ValidatingAdmissionPolicy e SSA |
-| Hyperledger Fabric | **3.1.4+** | SmartBFT (BFT consensus) — não usar versões < 3.0 (Raft é CFT apenas) |
-| bevel-operator-fabric | 1.9.0+ | Operator Kubernetes para gerenciar peers/orderers/CAs como CRDs |
-| Vault (HashiCorp) | 1.14+ | Gerenciamento de chaves criptográficas dos peers e orderers |
-| CouchDB | 3.3+ | StateDB dos peers para rich queries no histórico |
-| Istio | 1.20+ | Proxy requerido pelo bevel-operator-fabric para mTLS entre peers |
-| cert-manager | 1.13+ | TLS automático para o ValidatingAdmissionWebhook |
+| Kubernetes | 1.28+ | Base platform; support for ValidatingAdmissionPolicy and SSA |
+| Hyperledger Fabric | **3.1.4+** | SmartBFT (BFT consensus) — do not use versions < 3.0 (Raft is CFT only) |
+| bevel-operator-fabric | 1.9.0+ | Kubernetes operator for managing peers/orderers/CAs as CRDs |
+| Vault (HashiCorp) | 1.14+ | Cryptographic key management for peers and orderers |
+| CouchDB | 3.3+ | Peer StateDB for rich history queries |
+| Istio | 1.20+ | Proxy required by bevel-operator-fabric for mTLS between peers |
+| cert-manager | 1.13+ | Automatic TLS for the ValidatingAdmissionWebhook |
 
-### Build (desenvolvimento)
+### Build (development)
 
-| Dependência | Versão | Finalidade |
+| Dependency | Version | Purpose |
 |-------------|--------|------------|
-| Go | 1.22+ | Linguagem do operator, webhook e chaincode |
-| Kubebuilder | 3.x | Scaffolding do operator, geração de CRDs e webhook manifests |
-| controller-gen | 0.14+ | Geração dos YAML de CRD a partir dos markers no código Go |
-| fabric-gateway | 1.4+ | SDK Go para submeter transações e fazer queries no Fabric |
-| fabric-contract-api-go | 2.0+ | API para escrever chaincodes em Go |
-| Ansible | 2.15+ | Automação do deploy via Bevel |
-| Helm | 3.x | Charts do bevel-operator-fabric |
-| Docker | 24+ | Build das imagens do chaincode e do operator |
+| Go | 1.22+ | Language for the operator, webhook, and chaincode |
+| Kubebuilder | 3.x | Operator scaffolding, CRD generation, and webhook manifests |
+| controller-gen | 0.14+ | Generates CRD YAML from markers in Go code |
+| fabric-gateway | 1.4+ | Go SDK for submitting transactions and querying Fabric |
+| fabric-contract-api-go | 2.0+ | API for writing chaincodes in Go |
+| Ansible | 2.15+ | Deployment automation via Bevel |
+| Helm | 3.x | bevel-operator-fabric charts |
+| Docker | 24+ | Builds chaincode and operator images |
 
 ### AI Validator (sidecar)
 
-Compatível com qualquer API OpenAI-compatible. Opções recomendadas:
+Compatible with any OpenAI-compatible API. Recommended options:
 
-| Opção | Modelo sugerido | Quando usar |
+| Option | Suggested model | When to use |
 |-------|----------------|-------------|
-| Ollama (local) | `qwen2.5-coder:14b` | Air-gapped / compliance / sem dados saindo |
-| OpenAI | `gpt-4o` | Qualidade máxima, custo por token |
-| Azure OpenAI | `gpt-4o` | Enterprise, dados dentro da região |
-| Anthropic Claude | `claude-sonnet-4-6` | Raciocínio técnico de alta qualidade |
+| Ollama (local) | `qwen2.5-coder:14b` | Air-gapped / compliance / no data leaving the environment |
+| OpenAI | `gpt-4o` | Maximum quality, token-based cost |
+| Azure OpenAI | `gpt-4o` | Enterprise, data inside the region |
+| Anthropic Claude | `claude-sonnet-4-6` | High-quality technical reasoning |
 
 ---
 
-## Instalação
+## Installation
 
-### Pré-requisitos
+### Prerequisites
 
 ```bash
-# Verificar versões
+# Check versions
 kubectl version --client
 go version              # >= 1.22
 helm version            # >= 3.x
 ansible --version       # >= 2.15
 
-# Instalar kubebuilder
+# Install kubebuilder
 curl -L -o kubebuilder "https://go.kubebuilder.io/dl/latest/$(go env GOOS)/$(go env GOARCH)"
 chmod +x kubebuilder && sudo mv kubebuilder /usr/local/bin/
 
-# Instalar cert-manager no cluster (requerido pelo webhook)
+# Install cert-manager in the cluster (required by the webhook)
 kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
 kubectl wait --for=condition=Available deployment --all -n cert-manager --timeout=120s
 ```
 
 ---
 
-### Passo 1 — Deploy da rede Hyperledger Fabric (via Bevel)
+### Step 1 — Deploy the Hyperledger Fabric network (via Bevel)
 
 ```bash
-# 1.1 Instalar o bevel-operator-fabric no cluster
+# 1.1 Install bevel-operator-fabric in the cluster
 kubectl apply -f https://github.com/hyperledger-bevel/bevel-operator-fabric/releases/latest/download/install.yaml
 kubectl wait --for=condition=Available deployment --all -n bevel-operator-fabric-system --timeout=180s
 
-# 1.2 Verificar CRDs do Fabric operator disponíveis
+# 1.2 Check available Fabric operator CRDs
 kubectl get crd | grep hlf
 
-# 1.3 Configurar credenciais no network.yaml
-# Edite bevel/network.yaml com suas credenciais de Vault e contextos K8s
+# 1.3 Configure credentials in network.yaml
+# Edit bevel/network.yaml with your Vault credentials and K8s contexts
 
-# 1.4 Executar o playbook Bevel para criar a rede KubeGov
-# Isso cria: 4 CAs, 4 orgs de peers, 4 orderers SmartBFT, o channel kubegov
+# 1.4 Run the Bevel playbook to create the KubeGov network
+# This creates: 4 CAs, 4 peer orgs, 4 SmartBFT orderers, and the kubegov channel
 ansible-playbook run.yaml -e "@bevel/network.yaml" -v
 
-# 1.5 Verificar que todos os pods estão Running
+# 1.5 Verify that all pods are Running
 kubectl get pods -n kubechain-fabric-infra
 kubectl get pods -n kubechain-fabric-sec
 kubectl get pods -n kubechain-fabric-sre
 kubectl get pods -n kubechain-fabric-compliance
 kubectl get pods -n kubechain-fabric-orderer
 
-# 1.6 Verificar o channel kubegov criado
-# (via CLI do peer, dentro do pod peer0-infra)
+# 1.6 Verify that the kubegov channel was created
+# (via peer CLI, inside the peer0-infra pod)
 kubectl exec -it -n kubechain-fabric-infra deploy/peer0-infra -- \
   peer channel list
-# Esperado: kubegov
+# Expected: kubegov
 ```
 
 ---
 
-### Passo 2 — Deploy do chaincode KubeGov
+### Step 2 — Deploy the KubeGov chaincode
 
 ```bash
-# 2.1 Build do chaincode
+# 2.1 Build the chaincode
 cd chaincode/
 go mod tidy
 go build ./...
 
-# 2.2 Empacotar
+# 2.2 Package it
 peer lifecycle chaincode package kubegov.tar.gz \
   --path . \
   --lang golang \
   --label kubegov_1.0
 
-# 2.3 Instalar em todos os peers (repetir para cada org)
+# 2.3 Install on all peers (repeat for each org)
 for ORG in infra sec sre compliance; do
   kubectl exec -it -n kubechain-fabric-${ORG} deploy/peer0-${ORG} -- \
     peer lifecycle chaincode install kubegov.tar.gz
 done
 
-# 2.4 Aprovar em cada org (requer quorum para a endorse policy)
-# A endorse policy: AND(infra, sec, OR(sre, compliance))
+# 2.4 Approve in each org (requires quorum for the endorse policy)
+# Endorse policy: AND(infra, sec, OR(sre, compliance))
 PACKAGE_ID=$(kubectl exec -it -n kubechain-fabric-infra deploy/peer0-infra -- \
   peer lifecycle chaincode queryinstalled --output json | jq -r '.installed_chaincodes[0].package_id')
 
@@ -389,7 +389,7 @@ for ORG in infra sec sre; do
       --signature-policy "AND('org-infra.member','org-sec.member',OR('org-sre.member','org-compliance.member'))"
 done
 
-# 2.5 Commit do chaincode no channel
+# 2.5 Commit the chaincode on the channel
 peer lifecycle chaincode commit \
   --channelID kubegov \
   --name kubegov \
@@ -400,47 +400,47 @@ peer lifecycle chaincode commit \
   --peerAddresses peer0-sec.kubechain-fabric-sec:7051 \
   --peerAddresses peer0-sre.kubechain-fabric-sre:7051
 
-# 2.6 Verificar chaincode ativo
+# 2.6 Verify active chaincode
 peer lifecycle chaincode querycommitted --channelID kubegov
 ```
 
 ---
 
-### Passo 3 — Build e deploy do KubeChain Operator
+### Step 3 — Build and deploy the KubeChain Operator
 
 ```bash
-# 3.1 Inicializar o projeto kubebuilder (gera main.go, Makefile, Dockerfile)
+# 3.1 Initialize the kubebuilder project (generates main.go, Makefile, Dockerfile)
 cd operator/
-kubebuilder init --domain kubechain.io --repo github.com/sua-org/kubechain
+kubebuilder init --domain kubechain.io --repo github.com/your-org/kubechain
 kubebuilder create api --group kubechain --version v1 --kind ConfigChangeRequest
 
-# 3.2 Copiar os arquivos deste repo nos locations corretos gerados pelo kubebuilder
-# api/v1/configchangerequest_types.go → já existe no repo
-# controllers/configchangerequest_controller.go → já existe no repo
-# webhook/validating_webhook.go → já existe no repo
+# 3.2 Copy this repo's files into the correct locations generated by kubebuilder
+# api/v1/configchangerequest_types.go → already exists in the repo
+# controllers/configchangerequest_controller.go → already exists in the repo
+# webhook/validating_webhook.go → already exists in the repo
 
-# 3.3 Instalar dependências Go
+# 3.3 Install Go dependencies
 go mod tidy
-# Principais:
+# Main dependencies:
 # - sigs.k8s.io/controller-runtime
 # - k8s.io/apimachinery
 # - github.com/hyperledger/fabric-gateway/pkg/client
 # - github.com/hyperledger/fabric-contract-api-go
 
-# 3.4 Gerar CRDs e manifests do webhook
+# 3.4 Generate CRDs and webhook manifests
 make manifests
 make generate
 
-# 3.5 Instalar CRDs no cluster
+# 3.5 Install CRDs in the cluster
 make install
 
-# 3.6 Build e push da imagem Docker
-make docker-build docker-push IMG=sua-registry/kubechain-operator:v1.0.0
+# 3.6 Build and push the Docker image
+make docker-build docker-push IMG=your-registry/kubechain-operator:v1.0.0
 
-# 3.7 Deploy do operator no cluster
-make deploy IMG=sua-registry/kubechain-operator:v1.0.0
+# 3.7 Deploy the operator in the cluster
+make deploy IMG=your-registry/kubechain-operator:v1.0.0
 
-# 3.8 Verificar operator rodando
+# 3.8 Verify that the operator is running
 kubectl get pods -n kubechain-system
 # NAME                                    READY   STATUS    RESTARTS
 # kubechain-operator-7d9b4c8f6d-xk2p9   2/2     Running   0
@@ -449,11 +449,11 @@ kubectl get pods -n kubechain-system
 
 ---
 
-### Passo 4 — Configurar o AI Validator
+### Step 4 — Configure the AI Validator
 
 ```bash
-# Opção A: Ollama local (air-gapped)
-# Adicionar ao deployment do operator um sidecar com Ollama
+# Option A: local Ollama (air-gapped)
+# Add a sidecar with Ollama to the operator deployment
 
 cat <<EOF | kubectl apply -f -
 apiVersion: v1
@@ -467,7 +467,7 @@ data:
   AI_RISK_THRESHOLD: "0.85"
 EOF
 
-# Opção B: Claude API
+# Option B: Claude API
 kubectl create secret generic kubechain-ai-secret \
   --from-literal=ANTHROPIC_API_KEY=sk-ant-... \
   -n kubechain-system
@@ -475,43 +475,43 @@ kubectl create secret generic kubechain-ai-secret \
 
 ---
 
-### Passo 5 — Configurar o ValidatingAdmissionWebhook
+### Step 5 — Configure the ValidatingAdmissionWebhook
 
 ```bash
-# O cert-manager cria o TLS automaticamente para o webhook
-# O kubebuilder gerou o manifesto base em config/webhook/
+# cert-manager creates TLS automatically for the webhook
+# kubebuilder generated the base manifest in config/webhook/
 
-# Aplicar o ValidatingWebhookConfiguration
+# Apply the ValidatingWebhookConfiguration
 kubectl apply -f config/webhook/manifests.yaml
 
-# Verificar webhook registrado
+# Verify registered webhook
 kubectl get validatingwebhookconfigurations
 # NAME                          WEBHOOKS   AGE
 # kubechain-validating-webhook  1          30s
 
-# Testar que o webhook está ativo (deve bloquear)
+# Test that the webhook is active (it should block)
 kubectl apply -f - <<EOF
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: test-sem-prova
+  name: test-without-proof
   namespace: default
 spec:
   podSelector: {}
 EOF
-# Esperado: Error from server: "KubeChain: mudança rejeitada — annotation
-#           kubechain.io/proof-token ausente. Crie um ConfigChangeRequest..."
+# Expected: Error from server: "KubeChain: change rejected — annotation
+#           kubechain.io/proof-token missing. Create a ConfigChangeRequest..."
 ```
 
 ---
 
-### Passo 6 — Primeira mudança real
+### Step 6 — First real change
 
 ```bash
-# Criar um ConfigChangeRequest
+# Create a ConfigChangeRequest
 kubectl apply -f docs/example-ccr-networkpolicy.yaml
 
-# Acompanhar o pipeline em tempo real
+# Follow the pipeline in real time
 kubectl get ccr -n kubechain-system -w
 
 # NAME                                PHASE          AISCORE   PROOFTOKEN
@@ -521,10 +521,10 @@ kubectl get ccr -n kubechain-system -w
 # allow-payments-to-database-netpol   Approved       0.12      kt_7f3a9b2c...
 # allow-payments-to-database-netpol   Applied        0.12      kt_7f3a9b2c...
 
-# Ver detalhes completos
+# View full details
 kubectl describe ccr allow-payments-to-database-netpol -n kubechain-system
 
-# Verificar que a NetworkPolicy foi aplicada com o proof token
+# Verify that the NetworkPolicy was applied with the proof token
 kubectl get networkpolicy allow-payments-to-database -n database -o yaml | grep kubechain
 
 # kubechain.io/proof-token: "kt_7f3a9b2c1d4e5f6a..."
@@ -534,93 +534,93 @@ kubectl get networkpolicy allow-payments-to-database -n database -o yaml | grep 
 
 ---
 
-## Consultar o histórico de auditoria
+## Query the audit history
 
 ```bash
-# Via kubectl — status do CCR
+# Via kubectl — CCR status
 kubectl get ccr -A --sort-by=.metadata.creationTimestamp
 
-# Via chaincode query — histórico completo no ledger Fabric
+# Via chaincode query — full history in the Fabric ledger
 kubectl exec -it -n kubechain-fabric-infra deploy/peer0-infra -- \
   peer chaincode query \
   --channelID kubegov \
   --name kubegov \
   --ctor '{"function":"GetProposalHistory","Args":["NetworkPolicy","allow-payments-to-database","database"]}'
 
-# Via Grafana (se configurado com CouchDB como datasource)
+# Via Grafana (if configured with CouchDB as datasource)
 # Dashboard: KubeChain Audit Trail
-# Mostra: propostas por período, taxa de aprovação/rejeição,
-#         AI score médio, distribuição por resource kind
+# Shows: proposals by period, approval/rejection rate,
+#        average AI score, distribution by resource kind
 ```
 
 ---
 
-## Configuração da endorse policy
+## Endorse policy configuration
 
-A endorse policy define quem precisa concordar com uma mudança. Edite em `bevel/network.yaml` e reinstale o chaincode.
+The endorse policy defines who must agree to a change. Edit it in `bevel/network.yaml` and reinstall the chaincode.
 
 ```
-# Política padrão (recomendada para produção):
-# Infra + Sec obrigatórios + pelo menos 1 de SRE ou Compliance
+# Default policy (recommended for production):
+# Mandatory Infra + Sec + at least 1 of SRE or Compliance
 AND('org-infra.member', 'org-sec.member', OR('org-sre.member', 'org-compliance.member'))
 
-# Política mais restritiva (mudanças em produção crítica):
-# Todos os 4 times precisam concordar
+# More restrictive policy (critical production changes):
+# All 4 teams must agree
 AND('org-infra.member', 'org-sec.member', 'org-sre.member', 'org-compliance.member')
 
-# Política mais permissiva (ambiente de staging):
-# Qualquer 2 de 4
+# More permissive policy (staging environment):
+# Any 2 of 4
 OutOf(2, 'org-infra.member', 'org-sec.member', 'org-sre.member', 'org-compliance.member')
 ```
 
 ---
 
-## Tolerância a falhas (SmartBFT)
+## Fault tolerance (SmartBFT)
 
-Com **n orderers**, o SmartBFT tolera **f = ⌊(n-1)/3⌋** orderers maliciosos simultaneamente:
+With **n orderers**, SmartBFT tolerates **f = ⌊(n-1)/3⌋** malicious orderers simultaneously:
 
-| Orderers | Falhas toleradas | Caso de uso |
+| Orderers | Tolerated failures | Use case |
 |----------|-----------------|-------------|
-| 4 | 1 | Ambiente menor, desenvolvimento |
-| 7 | 2 | **Produção — recomendado** |
-| 10 | 3 | Alta criticidade, múltiplas regiões |
+| 4 | 1 | Smaller environment, development |
+| 7 | 2 | **Production — recommended** |
+| 10 | 3 | High criticality, multiple regions |
 
-Diferente do Raft (que é apenas CFT — Crash Fault Tolerant), o SmartBFT tolera orderers **ativamente maliciosos**, não apenas crashados. Um orderer comprometido que tenta emitir blocos falsos é detectado e ignorado pelo protocolo.
+Unlike Raft, which is only CFT (Crash Fault Tolerant), SmartBFT tolerates **actively malicious** orderers, not only crashed ones. A compromised orderer attempting to emit false blocks is detected and ignored by the protocol.
 
 ---
 
-## Variáveis de ambiente do operator
+## Operator environment variables
 
-| Variável | Padrão | Descrição |
+| Variable | Default | Description |
 |----------|--------|-----------|
-| `FABRIC_GATEWAY_ENDPOINT` | — | Endpoint gRPC do peer gateway (ex: `peer0-infra:7051`) |
-| `FABRIC_CHANNEL_NAME` | `kubegov` | Nome do channel Fabric |
-| `FABRIC_CHAINCODE_NAME` | `kubegov` | Nome do chaincode |
-| `FABRIC_MSP_ID` | `org-infra` | MSP ID da org que o operator representa |
-| `FABRIC_TLS_CERT_PATH` | — | Path para o certificado TLS do peer (montado via Vault) |
-| `AI_VALIDATOR_URL` | `http://localhost:11434` | URL do AI Validator sidecar |
-| `AI_VALIDATOR_MODEL` | `qwen2.5-coder:14b` | Modelo a usar |
-| `AI_RISK_THRESHOLD` | `0.85` | Score acima do qual a proposta é rejeitada |
-| `WEBHOOK_FAIL_CLOSED` | `true` | Se `false`, libera quando Fabric está indisponível (não recomendado) |
+| `FABRIC_GATEWAY_ENDPOINT` | — | Peer gateway gRPC endpoint, for example `peer0-infra:7051` |
+| `FABRIC_CHANNEL_NAME` | `kubegov` | Fabric channel name |
+| `FABRIC_CHAINCODE_NAME` | `kubegov` | Chaincode name |
+| `FABRIC_MSP_ID` | `org-infra` | MSP ID of the org represented by the operator |
+| `FABRIC_TLS_CERT_PATH` | — | Path to the peer TLS certificate, mounted via Vault |
+| `AI_VALIDATOR_URL` | `http://localhost:11434` | AI Validator sidecar URL |
+| `AI_VALIDATOR_MODEL` | `qwen2.5-coder:14b` | Model to use |
+| `AI_RISK_THRESHOLD` | `0.85` | Score above which the proposal is rejected |
+| `WEBHOOK_FAIL_CLOSED` | `true` | If `false`, allows when Fabric is unavailable (not recommended) |
 
 ---
 
-## O que NÃO é coberto por este MVP
+## What is NOT covered by this MVP
 
-Este projeto é uma referência arquitetural e MVP. Para produção, adicionar:
+This project is an architectural reference and MVP. For production, add:
 
-- [ ] `pkg/fabric/client.go` — implementação completa do fabric-gateway SDK com mTLS, reconnect e retry
-- [ ] `main.go` — gerado pelo kubebuilder, registra controller + webhook no manager
-- [ ] Testes de integração com rede Fabric em Kind/Minikube
-- [ ] Política de revogação de ProofTokens (para rollback de mudanças)
-- [ ] Multi-cluster: um KubeChain para vários clusters K8s compartilhando o mesmo ledger
-- [ ] Dashboard Grafana com CouchDB como datasource
-- [ ] Zero-Knowledge proof do AI score (provar que score < threshold sem revelar o modelo)
-- [ ] Integração com Sigstore/Cosign para assinar os manifests antes do submit ao Fabric
+- [ ] `pkg/fabric/client.go` — complete fabric-gateway SDK implementation with mTLS, reconnect, and retry
+- [ ] `main.go` — generated by kubebuilder, registers controller + webhook in the manager
+- [ ] Integration tests with a Fabric network in Kind/Minikube
+- [ ] ProofToken revocation policy for change rollbacks
+- [ ] Multi-cluster: one KubeChain for multiple K8s clusters sharing the same ledger
+- [ ] Grafana dashboard with CouchDB as datasource
+- [ ] Zero-Knowledge proof of the AI score, proving score < threshold without revealing the model
+- [ ] Integration with Sigstore/Cosign to sign manifests before submitting them to Fabric
 
 ---
 
-## Referências
+## References
 
 - [Hyperledger Fabric 3.x + SmartBFT](https://hyperledger-fabric.readthedocs.io/en/release-3.0/)
 - [Hyperledger Bevel](https://hyperledger-bevel.readthedocs.io/)
@@ -632,9 +632,9 @@ Este projeto é uma referência arquitetural e MVP. Para produção, adicionar:
 
 ---
 
-## Licença
+## License
 
-Apache 2.0 — ver `LICENSE`.
+Apache 2.0 — see `LICENSE`.
 
-*Desenvolvido como referência arquitetural para governança de clusters Kubernetes enterprise.*  
-*Não auditado para produção — use com revisão de segurança adicional.*
+*Developed as an architectural reference for enterprise Kubernetes cluster governance.*  
+*Not audited for production — use with additional security review.*
